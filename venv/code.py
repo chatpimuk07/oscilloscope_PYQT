@@ -8,12 +8,13 @@ import pyvisa
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QLabel, QLineEdit,
-    QPushButton, QComboBox, QGridLayout, QFrame, QSpinBox
+    QApplication, QWidget, QLabel, QLineEdit, QTextEdit,
+    QPushButton, QComboBox, QGridLayout, QFrame, QSpinBox,
+    QHBoxLayout, QVBoxLayout, QCheckBox
 )   
 
 def _generate_1_2_5_series(units):
-    """สร้างลิสต์ค่าตามลำดับ 1-2-5 จากรายการหน่วย [(unit_str, seconds_or_volts_per_unit, [multipliers]), ...]"""
+    """Generate a list of values in 1-2-5 sequence from unit definitions."""
     values = []
     for unit_str, multipliers in units:
         for m in multipliers:
@@ -24,7 +25,7 @@ def _generate_1_2_5_series(units):
     return values
 
 
-# Time/div: 5 ns/div ... 500 s/div (ลำดับ 1-2-5)
+# Time/div settings: 5 ns/div to 500 s/div (1-2-5 sequence)
 TIME_DIV_VALUES = _generate_1_2_5_series([
     ("ns", [5, 10, 20, 50, 100, 200, 500]),
     ("µs", [1, 2, 5, 10, 20, 50, 100, 200, 500]),
@@ -32,7 +33,7 @@ TIME_DIV_VALUES = _generate_1_2_5_series([
     ("s",  [1, 2, 5, 10, 20, 50, 100, 200, 500]),
 ])
 
-# V/div: 500 µV/div ... 10 V/div (ลำดับ 1-2-5)
+# V/div settings: 500 µV/div to 10 V/div (1-2-5 sequence)
 VOLT_DIV_VALUES = _generate_1_2_5_series([
     ("µV", [500]),
     ("mV", [1, 2, 5, 10, 20, 50, 100, 200, 500]),
@@ -51,9 +52,9 @@ CH_OFFSET_VALUES = [
 ]
 
 def parse_offset_value(text_value):
-    """แปลงข้อความ เช่น '-100.00µs' ให้กลายเป็นตัวเลขทศนิยมหน่วยวินาทีหรือโวลต์จริง"""
+    """Convert text values (like '-100.00µs') to real float numbers in seconds or volts."""
     try:
-        # รองรับทั้งสัญลักษณ์ µ และ μ
+        # Support both micro symbols (µ and μ)
         clean_text = text_value.replace("µs", "").replace("μs", "").replace("ms", "").replace("ns", "").replace("mV", "").replace("µV", "").replace("μV", "").replace("s", "").replace("V", "")
         num = float(clean_text)
         
@@ -178,32 +179,30 @@ class AppLiveScope(QWidget):
         super().__init__()
         self.setWindowTitle("Oscilloscope Control Center")
         
-        # ติดตั้งระบบหลังบ้าน Controller และสถานะสตรีม
         self.controller = ScopeController()
         self.is_streaming = False
+        self.channel_widgets = {} # Stores control widgets for each channel
         
         self.create_widgets()
-        
-        # เริ่มต้นเชื่อมต่ออุปกรณ์และเปิดระบบภาพสด
         self.init_connection()
-        
         self.showFullScreen()
         
     def create_widgets(self):
         layout = QGridLayout()
-        # ------------------------------- หน้าจอ MONITOR REAL-TIME ----------------------------
+        # ------------------------------- REAL-TIME MONITOR SCREEN ----------------------------
         self.monitor_frame = QFrame()
         self.monitor_frame.setFrameShape(QFrame.Shape.Box)
         self.monitor_frame.setStyleSheet("background-color: black; border: 2px solid #333;")
         monitor_layout = QGridLayout()
         
-        self.display_label = QLabel("กำลังเชื่อมต่ออุปกรณ์...")
+        self.display_label = QLabel("Connecting to device...")
         self.display_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.display_label.setStyleSheet("color: #00ff00; font-size: 18px; font-family: Consolas;")
         
         monitor_layout.addWidget(self.display_label, 0, 0)
         self.monitor_frame.setLayout(monitor_layout)
-        #-------------------------------status----------------------------
+        
+        #------------------------------- Status Block ----------------------------
         self.Status = QFrame()
         self.Status.setFrameShape(QFrame.Shape.Box)
         self.s_frame = QGridLayout()
@@ -215,13 +214,14 @@ class AppLiveScope(QWidget):
         self.S_button = QPushButton("Stop")
         self.S_button.clicked.connect(self.stop)
 
-        self.s_frame.addWidget(self.name_lable,0,0)
-        self.s_frame.addWidget(self.status_label,1,0)
-        self.s_frame.addWidget(self.R_button,2,0)
-        self.s_frame.addWidget(self.S_button,2,1)
+        self.s_frame.addWidget(self.name_lable, 0, 0, 1, 2)
+        self.s_frame.addWidget(self.status_label, 1, 0, 1, 2)
+        self.s_frame.addWidget(self.R_button, 2, 0)
+        self.s_frame.addWidget(self.S_button, 2, 1)
 
         self.Status.setLayout(self.s_frame)
-        #-------------------------------horizotal----------------------------
+        
+        #------------------------------- Horizontal Settings ----------------------------
         self.horizotal = QFrame()
         self.horizotal.setFrameShape(QFrame.Shape.Box)
         self.h_frame = QGridLayout()
@@ -242,7 +242,8 @@ class AppLiveScope(QWidget):
         self.h_frame.addWidget(self.spin, 3, 0)
 
         self.horizotal.setLayout(self.h_frame)
-        #-------------------------Trigger----------------------------------
+        
+        #------------------------- Trigger Settings ----------------------------------
         self.trigger = QFrame()
         self.trigger.setFrameShape(QFrame.Shape.Box)
         self.t_frame = QGridLayout()
@@ -279,14 +280,15 @@ class AppLiveScope(QWidget):
         self.t_frame.addWidget(self.sweep_combo,2,3)
         
         self.trigger.setLayout(self.t_frame)
-        #-------------------------scpi----------------------------------
+        
+        #------------------------- SCPI Command Console ----------------------------------
         self.scpi = QFrame()
         self.scpi.setFrameShape(QFrame.Shape.Box)
         self.scpi_frame = QGridLayout()
 
         self.scpi_label = QLabel("scpi")
         self.scpi_entry = QLineEdit()
-        self.scpi_entry.setPlaceholderText("พิมพ์คำสั่ง SCPI...")
+        self.scpi_entry.setPlaceholderText("Enter SCPI command...")
         self.scpi_entry.returnPressed.connect(self.submit)
         self.scpi_submit = QPushButton("Submit")
         self.scpi_submit.clicked.connect(self.submit)
@@ -296,38 +298,269 @@ class AppLiveScope(QWidget):
         self.scpi_frame.addWidget(self.scpi_submit,1,1)
 
         self.scpi.setLayout(self.scpi_frame)
+        
+        #------------------------- Channel Control Boxes (CH1 - CH4) -----------------
+        self.channel_colors = {
+            1: "#ffd700",  # CH1: Yellow
+            2: "#00bfff",  # CH2: Light Blue
+            3: "#ff1493",  # CH3: Pink
+            4: "#32cd32",  # CH4: Lime Green
+        }
+
+        self.ch_frames = []
+        for ch_num in range(1, 5):
+            ch_frame = self.create_channel_box(
+                parent=self, 
+                ch=ch_num, 
+                border_color=self.channel_colors[ch_num]
+            )
+            self.ch_frames.append(ch_frame)
+
+        #-------------------------Capture-Button-------------------
+        self.c_button = QPushButton("Capture Screen")
+        self.c_button.clicked.connect(self.capture_and_save) 
+        self.s_frame.addWidget(self.c_button, 3, 0, 1, 2)
+
+        #-------------------------SCPI-Log------------------------------
+        self.log_frame = QFrame()
+        self.log_frame.setFrameShape(QFrame.Shape.Box)
+        log_layout = QVBoxLayout(self.log_frame)
+        log_layout.setContentsMargins(5, 5, 5, 5)
+        
+        log_title = QLabel("SCPI Communication Log")
+        log_title.setStyleSheet("font-weight: bold; font-size: 11px; color: #555;")
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setStyleSheet("background-color: #f9f9f9; font-family: Consolas; font-size: 11px; border: 1px solid #ddd;")
+        
+        log_layout.addWidget(log_title)
+        log_layout.addWidget(self.log_text)
+        
+        #-------------------------Close-Button----------------------------
+        self.close_button = QPushButton("Close Screen")
+        self.close_button.setStyleSheet("""
+            QPushButton {
+                background-color: #ff4d4d; 
+                color: white; 
+                font-weight: bold; 
+                font-size: 14px;
+                border-radius: 6px;
+                border: 1px solid #cc0000;
+            }
+            QPushButton:hover {
+                background-color: #ff3333;
+            }
+            QPushButton:pressed {
+                background-color: #cc0000;
+            }
+        """)
+        self.close_button.clicked.connect(self.close) 
+
+        self.right_panel = QFrame()
+        self.right_panel.setStyleSheet("border: none; background: transparent;")
+        right_layout = QVBoxLayout(self.right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(10) 
+        
+        for ch_frame in self.ch_frames:
+            right_layout.addWidget(ch_frame)
+            
+        right_layout.addStretch(1) 
+
         #-----------------------------------------------------------
-        # จัดตารางแถวควบคุมไว้แถว 0 และ ดันจอ Monitor ไปไว้แถวล่าง 1
+        # Main Window Grid Layout Setup
         layout.addWidget(self.Status, 0, 0)
         layout.addWidget(self.horizotal, 0, 1)
         layout.addWidget(self.trigger, 0, 2)
         layout.addWidget(self.scpi, 0, 3)
-        layout.addWidget(self.monitor_frame, 1, 0, 1, 3)
+        
+        layout.addWidget(self.monitor_frame, 1, 0, 4, 4)
+        layout.addWidget(self.right_panel, 1, 4, 5, 1) # ครอบคลุมแถว 0 ถึง 4 ฝั่งขวาสุดทั้งหมด
+        
+        layout.addWidget(self.log_frame, 5, 0, 1, 4)
+        layout.addWidget(self.close_button, 5, 4)
+        
+        layout.setRowStretch(1, 1) 
+        layout.setRowStretch(5, 0) 
+        
         self.setLayout(layout)
 
     # =================================================================
-    # ระบบควบคุมสัญญาณภาพสด (QTimer Loop)
+    # PyQt Widget Helper Functions
+    # =================================================================
+    def create_channel_box(self, parent, ch, border_color, fg_text=None):
+        text_color = fg_text if fg_text else border_color
+        
+        # Create a container frame with color styling for each channel
+        frame = QFrame(parent)
+        frame.setObjectName(f"ChannelBox_{ch}")
+        frame.setStyleSheet(f"""
+            QFrame#{frame.objectName()} {{
+                border: 2px solid {border_color};
+                border-radius: 8px;
+                background-color: #f5f5f5;
+            }}
+            QLabel {{
+                border: none;
+                font-weight: bold;
+            }}
+            QCheckBox {{
+                border: none;
+            }}
+        """)
+        
+        # Vertical arrangement of controls inside the channel frame
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(5)
+        
+        # 1. Channel Title
+        lbl_title = QLabel(f"CH {ch}", frame)
+        lbl_title.setStyleSheet(f"color: {text_color}; font-size: 13px;")
+        layout.addWidget(lbl_title)
+        
+        # 2. Toggle Visibility Checkbox
+        chk = QCheckBox("display", frame)
+        chk.setChecked(True)
+        chk.toggled.connect(lambda checked, ch=ch: self.on_channel_display_toggle(ch, checked))
+        layout.addWidget(chk)
+        
+        # 3. Volts per division selector (V/div)
+        row_vdiv, cb_vdiv = self.create_channel_control_row(
+            frame, "V/div", VOLT_DIV_VALUES,
+            on_select=lambda text, ch=ch: self.on_channel_vdiv_change(ch, text)
+        )
+        layout.addWidget(row_vdiv)
+        
+        # 4. Vertical Offset selector
+        row_offset, sb_offset = self.create_channel_offset_spinbox_row(
+            frame, "offset", CH_OFFSET_VALUES, ch=ch,
+            initial_value="0.00V"
+        )
+        layout.addWidget(row_offset)
+        
+        # 5. Input Coupling selector (DC / AC / GND)
+        row_coupling, cb_coupling = self.create_channel_control_row(
+            frame, "coupling", ["DC", "AC", "GND"],
+            on_select=lambda text, ch=ch: self.on_channel_coupling_change(ch, text)
+        )
+        layout.addWidget(row_coupling)
+        
+        # Save widgets in a dictionary for easy updates later
+        self.channel_widgets[ch] = {
+            "frame": frame,
+            "display_checkbox": chk,
+            "vdiv": cb_vdiv,      
+            "offset": sb_offset,  
+            "coupling": cb_coupling,
+        }
+        
+        return frame
+    
+    def create_channel_control_row(self, parent_frame, label_text, items, on_select):
+        """Helper to create a horizontal row with a QLabel and QComboBox."""
+        row_widget = QWidget(parent_frame)
+        row_widget.setStyleSheet("background: transparent; border: none;")
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        
+        label = QLabel(label_text, row_widget)
+        label.setFixedWidth(55)
+        
+        combo = QComboBox(row_widget)
+        combo.addItems(items)
+        combo.currentTextChanged.connect(on_select)
+        
+        row_layout.addWidget(label)
+        row_layout.addWidget(combo)
+        row_widget.setLayout(row_layout)
+        
+        return row_widget, combo 
+    
+    def create_channel_offset_spinbox_row(self, parent_frame, label_text, value_list, ch, initial_value):
+        """Helper to create a horizontal row with a QLabel and ListSpinBox for offsets."""
+        row_widget = QWidget(parent_frame)
+        row_widget.setStyleSheet("background: transparent; border: none;")
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        
+        label = QLabel(label_text, row_widget)
+        label.setFixedWidth(55)
+        
+        spin = ListSpinBox(value_list, row_widget)
+        
+        # Find and select the initial value (e.g., "0.00V")
+        if initial_value in value_list:
+            spin.setValue(value_list.index(initial_value))
+            
+        spin.valueChanged.connect(lambda index, ch=ch: self.on_channel_offset_change(ch, index))
+        
+        row_layout.addWidget(label)
+        row_layout.addWidget(spin)
+        row_widget.setLayout(row_layout)
+        
+        return row_widget, spin
+
+    # Helper function to append text into SCPI log box
+    def log_message(self, direction, text):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.log_text.append(f"[{timestamp}] {direction} {text}")
+        # Scroll to the bottom of the log automatically
+        self.log_text.ensureCursorVisible()
+
+    # =================================================================
+    # Callback Functions for Channel Settings (Sends commands to device)
+    # =================================================================
+    def on_channel_display_toggle(self, ch, checked):
+        state = "ON" if checked else "OFF"
+        cmd = f":OUTPut{ch}:STATe {state}"
+        self.log_message("TX ->", cmd)
+        self.controller.write(cmd)
+
+    def on_channel_vdiv_change(self, ch, value):
+        val_volt = parse_offset_value(value)
+        cmd = f":CHANnel{ch}:SCALe {val_volt}"
+        self.log_message("TX ->", cmd)
+        self.controller.write(cmd)
+
+    def on_channel_offset_change(self, ch, index_value):
+        actual_text = CH_OFFSET_VALUES[index_value]
+        val_volt = parse_offset_value(actual_text)
+        cmd = f":CHANnel{ch}:OFFSet {val_volt}"
+        self.log_message("TX ->", cmd)
+        self.controller.write(cmd)
+
+    def on_channel_coupling_change(self, ch, value):
+        cmd = f":CHANnel{ch}:COUPling {value}"
+        self.log_message("TX ->", cmd)
+        self.controller.write(cmd)
+
+    # =================================================================
+    # Live Screen Streaming System (QTimer Loop)
     # =================================================================
     def init_connection(self):
         try:
             self.controller.connect()
             time.sleep(0.3)
             try:
+                self.log_message("TX ->", "*IDN?")
                 idn = self.controller.query("*IDN?")
+                self.log_message("RX <-", idn)
                 self.name_lable.setText(f"Connected:\n{idn[:25]}...")
             except Exception:
                 self.name_lable.setText("Connected:\nOscilloscope")
             
             self.is_streaming = True
             
-            # ตั้งตัวจับเวลารันลูปอัปเดตหน้าจอหลักทุก ๆ 700 มิลลิวินาที
+            # Update live screen image every 700 ms
             self.timer = QTimer()
             self.timer.timeout.connect(self.update_loop)
             self.timer.start(700)
             
         except Exception as e:
-            self.display_label.setText(f"การเชื่อมต่อล้มเหลว:\n{e}")
+            self.display_label.setText(f"Connection Failed:\n{e}")
             self.display_label.setStyleSheet("color: red;")
+            self.log_message("[ERR]", f"Connection failed: {e}")
 
     def update_loop(self):
         if self.is_streaming:
@@ -338,79 +571,93 @@ class AppLiveScope(QWidget):
                     self.display_label.setPixmap(pixmap)
                     self.display_label.setScaledContents(True)
             except Exception as e:
-                print(f"Stream Warning: {e} (กำลังรับสัญญาณใหม่...)")
+                print(f"Stream Warning: {e} (retrying...)")
+
+    def capture_and_save(self):
+        """Action for capture screen button."""
+        self.log_message("TX ->", ":DISPlay:SNAP? (Trigger Manual Capture)")
+        try:
+            self.update_loop()
+            self.log_message("[OK]", "Screen captured successfully!")
+        except Exception as e:
+            self.log_message("[ERR]", f"Capture failed: {e}")
 
     # =================================================================
-    # ฟังก์ชัน Callback ประมวลผลคำสั่งส่งไปยังเครื่องออสซิลโลสโคป
+    # Callback Functions for Oscilloscope Parameters (Timebase & Trigger)
     # =================================================================
     def time_offset(self, index_value):
         actual_text = H_OFFSET_VALUES[index_value]
-        print(f"Horizontal Offset เปลี่ยนเป็น: {actual_text}")
         val_sec = parse_offset_value(actual_text)
-        self.controller.write(f":TIMebase:MAIN:OFFSet {val_sec}")
+        cmd = f":TIMebase:MAIN:OFFSet {val_sec}"
+        self.log_message("TX ->", cmd)
+        self.controller.write(cmd)
 
     def level_offset(self, index_value):
         actual_text = CH_OFFSET_VALUES[index_value]
-        print(f"Trigger Level เปลี่ยนเป็น: {actual_text}")
         val_volt = parse_offset_value(actual_text)
-        self.controller.write(f":TRIGger:EDGE:LEVel {val_volt}")
+        cmd = f":TRIGger:EDGE:LEVel {val_volt}"
+        self.log_message("TX ->", cmd)
+        self.controller.write(cmd)
     
     def time_div(self, value):
-        print(f"Time/div เปลี่ยนเป็น: {value}")
         val_sec = parse_offset_value(value)
-        self.controller.write(f":TIMebase:MAIN:SCALe {val_sec}")
+        cmd = f":TIMebase:MAIN:SCALe {val_sec}"
+        self.log_message("TX ->", cmd)
+        self.controller.write(cmd)
 
     def source_select(self, value):
-        print(f"Trigger Source เปลี่ยนเป็น: {value}")
-        # แปลงข้อความจากคอมโบ เช่น CH1 -> CHANnel1
         ch_num = value[-1]
-        self.controller.write(f":TRIGger:EDGe:SOURce CHANnel{ch_num}")
+        cmd = f":TRIGger:EDGe:SOURce CHANnel{ch_num}"
+        self.log_message("TX ->", cmd)
+        self.controller.write(cmd)
 
     def slope_select(self, value):
-        print(f"Trigger Slope เปลี่ยนเป็น: {value}")
         scpi_slope = "POSitive" if value == "Rising" else "NEGative"
-        self.controller.write(f":TRIGger:EDGE:SLOPe {scpi_slope}")
+        cmd = f":TRIGger:EDGE:SLOPe {scpi_slope}"
+        self.log_message("TX ->", cmd)
+        self.controller.write(cmd)
 
     def sweep_select(self, value):
-        print(f"Trigger Sweep เปลี่ยนเป็น: {value}")
         scpi_sweep = {"Auto": "AUTO", "Normal": "NORMal", "Single": "SINGle"}.get(value, "AUTO")
-        self.controller.write(f":TRIGger:SWEep {scpi_sweep}")
+        cmd = f":TRIGger:SWEep {scpi_sweep}"
+        self.log_message("TX ->", cmd)
+        self.controller.write(cmd)
 
     def run(self):
         try:
+            self.log_message("TX ->", ":RUN")
             self.controller.run()
             self.status_label.setText("Status : Run")
             self.status_label.setStyleSheet("color: green; font-weight: bold;")
-            print("Run")
         except Exception as e:
-            print(f"Error: {e}")
+            self.log_message("[ERR]", f"Run Error: {e}")
 
     def stop(self):
         try:
+            self.log_message("TX ->", ":STOP")
             self.controller.stop()
             self.status_label.setText("Status : Stop")
             self.status_label.setStyleSheet("color: red; font-weight: bold;")
-            print("Stop")
         except Exception as e:
-            print(f"Error: {e}")
+            self.log_message("[ERR]", f"Stop Error: {e}")
 
     def submit(self):
         command = self.scpi_entry.text().strip()
         if command:
-            print(f"command : {command}")
+            self.log_message("TX ->", command)
             try:
-                # ตรวจสอบว่าเป็นคำสั่งแบบถามข้อมูล (?) หรือไม่
                 if "?" in command:
                     res = self.controller.query(command)
-                    print(f"Response: {res}")
+                    self.log_message("RX <-", res)
                 else:
                     self.controller.write(command)
                 self.scpi_entry.clear()
             except Exception as e:
-                print(f"SCPI Transmission Error: {e}")
+                self.log_message("[ERR]", f"SCPI Transmission Error: {e}")
 
-    # ดักสัญญาณการปิดหน้าจอ เพื่อ Clear พอร์ตสื่อสาร
+    # Handle window close event to safely clean up communication ports
     def closeEvent(self, event):
+        self.log_message("[SYSTEM]", "Closing Connection and exiting application...")
         self.is_streaming = False
         if hasattr(self, 'timer'):
             self.timer.stop()
